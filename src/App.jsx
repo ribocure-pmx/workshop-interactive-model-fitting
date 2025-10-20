@@ -13,7 +13,7 @@ import {
 } from 'recharts';
 
 // Synthetic reference data generated from an inhibitory Emax model.
-const SYNTH = { E0: 100, Emax: 80, ED50: 0.01, h: 1 };
+const SYNTH = { E0: 100, Emax: 80, ED50: 1, h: 1 };
 const DOSES = [0.5, 1, 2, 3];
 
 function emaxPred(d, p) {
@@ -31,36 +31,33 @@ const models = {
   Linear: {
     id: 'Linear',
     params: {
-      a: { label: 'Intercept a', min: 0, max: 120, step: 0.5, defaultValue: 100 },
-      b: { label: 'Slope b', min: -200, max: 50, step: 0.5, defaultValue: -30 },
+      b: { label: 'Slope b', min: -200, max: 50, step: 0.5, defaultValue: -20 },
     },
-    fn: (x, p) => p.a + p.b * x,
-    eq: (p) => `y = a + b·x  (a=${fmt(p.a)}, b=${fmt(p.b)})`,
+    fn: (x, p) => 100 + p.b * x,
+    eq: (p) => `y = 100 + b·x  (b=${fmt(p.b)})`,
   },
   'Log-linear': {
     id: 'Log-linear',
     params: {
-      a: { label: 'Intercept a', min: 0, max: 120, step: 0.5, defaultValue: 100 },
-      b: { label: 'Slope b', min: -200, max: 50, step: 0.5, defaultValue: -60 },
+      b: { label: 'Slope b', min: -200, max: 50, step: 0.5, defaultValue: -50 },
     },
-    fn: (x, p) => p.a + p.b * Math.log10(x + LOG_OFFSET),
-    eq: (p) => `y = a + b·log10(x + ${LOG_OFFSET})  (a=${fmt(p.a)}, b=${fmt(p.b)})`,
+    fn: (x, p) => 100 + p.b * (Math.log10(x + LOG_OFFSET) - Math.log10(LOG_OFFSET)),
+    eq: (p) => `y = a + b·log10(x + ε)  (a=${fmt(100 - p.b * Math.log10(LOG_OFFSET))}, b=${fmt(p.b)})`,
   },
   Emax: {
     id: 'Emax',
     params: {
-      E0: { label: 'Baseline E0', min: 50, max: 120, step: 0.5, defaultValue: 100 },
-      Emax: { label: 'Max drop Emax', min: 0, max: 100, step: 0.5, defaultValue: 60 },
-      ED50: { label: 'ED50', min: 0.001, max: 3, step: 0.001, defaultValue: 0.5 },
-      h: { label: 'Hill h', min: 0.2, max: 4, step: 0.05, defaultValue: 1.0 },
+      Emax: { label: 'Emax', min: 0, max: 100, step: 0.5, defaultValue: 70 },
+      ED50: { label: 'ED50', min: 0.001, max: 3, step: 0.001, defaultValue: 1.5 },
+      h: { label: 'Hill h', min: 0.2, max: 4, step: 0.05, defaultValue: 1.5 },
     },
     fn: (x, p) => {
       const num = p.Emax * Math.pow(x, p.h);
       const den = Math.pow(p.ED50, p.h) + Math.pow(x, p.h);
       const inh = den > 0 ? num / den : 0;
-      return p.E0 - inh;
+      return 100 - inh;
     },
-    eq: (p) => `y = E0 − (Emax·x^h)/(ED50^h + x^h)  (E0=${fmt(p.E0)}, Emax=${fmt(p.Emax)}, ED50=${fmt(p.ED50)}, h=${fmt(p.h)})`,
+    eq: (p) => `y = 100 − (Emax·x^h)/(ED50^h + x^h)  (Emax=${fmt(p.Emax)}, ED50=${fmt(p.ED50)}, h=${fmt(p.h)})`,
   },
 };
 
@@ -73,10 +70,27 @@ function useModelState(modelKey) {
   const defaults = Object.fromEntries(
     Object.entries(cfg.params).map(([k, v]) => [k, v.defaultValue]),
   );
-  const [state, setState] = useState(defaults);
-  const update = (k, val) => setState((s) => ({ ...s, [k]: val }));
-  const reset = () => setState(defaults);
-  return { params: state, update, reset, cfg };
+  const [stateByModel, setStateByModel] = useState(() => {
+    const initial = {};
+    Object.keys(models).forEach(key => {
+      initial[key] = Object.fromEntries(
+        Object.entries(models[key].params).map(([k, v]) => [k, v.defaultValue])
+      );
+    });
+    return initial;
+  });
+  
+  const params = stateByModel[modelKey];
+  const update = (k, val) => setStateByModel((s) => ({ 
+    ...s, 
+    [modelKey]: { ...s[modelKey], [k]: val } 
+  }));
+  const reset = () => setStateByModel((s) => ({ 
+    ...s, 
+    [modelKey]: defaults 
+  }));
+  
+  return { params, update, reset, cfg };
 }
 
 function rss(obs, pred) {
@@ -88,11 +102,11 @@ function clampResponse(y) {
 }
 
 export default function App() {
-  const [modelKey, setModelKey] = useState('Emax');
+  const [modelKey, setModelKey] = useState('Linear');
   const { params, update, reset, cfg } = useModelState(modelKey);
 
   const curve = useMemo(() => {
-    const xs = Array.from({ length: 321 }, (_, i) => i * 0.01);
+    const xs = Array.from({ length: 501 }, (_, i) => i * 0.01);
     return xs.map((x) => ({ x, y: clampResponse(models[modelKey].fn(x, params)) }));
   }, [params, modelKey]);
 
@@ -155,15 +169,7 @@ export default function App() {
               ))}
             </div>
 
-            <div className="mt-6 flex items-center justify-between">
-              <button
-                className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300"
-                onClick={reset}
-                title="Reset parameters to defaults"
-                type="button"
-              >
-                Reset
-              </button>
+            <div className="mt-6 flex items-center justify-end">
               <div className="text-right">
                 <div className="text-xs uppercase tracking-wide text-gray-500">Fit criterion</div>
                 <div className="text-base font-semibold">RSS = {fmt(rssVal, 1)}</div>
@@ -183,30 +189,33 @@ export default function App() {
           <div className="md:col-span-2 bg-white rounded-2xl p-4 shadow-sm border border-gray-200">
             <div className="h-[420px]">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={curve} margin={{ top: 10, right: 20, bottom: 10, left: 0 }}>
+                <ComposedChart margin={{ top: 10, right: 20, bottom: 10, left: 0 }} syncId="doseResponse">
+                  <defs>
+                    <clipPath id="curve-clip">
+                      <rect x="0" y="0" width="100%" height="100%" />
+                    </clipPath>
+                  </defs>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="x"
                     type="number"
-                    domain={[0, 3.2]}
+                    domain={[0, 5]}
+                    ticks={[0, 1, 2, 3, 4, 5]}
                     label={{ value: 'Dose (mg/kg)', position: 'insideBottomRight', offset: -5 }}
                   />
                   <YAxis
                     dataKey="y"
                     domain={[0, 120]}
                     ticks={[0, 20, 40, 60, 80, 100, 120]}
-                    label={{ value: '% remaining', angle: -90, position: 'insideLeft' }}
+                    label={{ value: 'Knockdown D15 (%)', angle: -90, position: 'insideLeft' }}
                   />
                   <Tooltip formatter={(val, name) => [fmt(val), name]} />
                   <Legend verticalAlign="top" height={36} />
+                  <Line name={`${modelKey} model`} data={curve} type="monotone" dataKey="y" stroke="#8884d8" dot={false} strokeWidth={3} isAnimationActive={false} />
                   <Scatter name="Data" data={demoData} fill="#111827" shape="circle" r={5} isAnimationActive={false} />
-                  <Line name={`${modelKey} model`} type="monotone" dataKey="y" dot={false} strokeWidth={3} />
                   <ReferenceLine y={100} stroke="#9CA3AF" strokeDasharray="4 4" />
                 </ComposedChart>
               </ResponsiveContainer>
-            </div>
-            <div className="mt-3 text-xs text-gray-500">
-              Data: synthetic Emax at doses 0.5, 1, 2, 3 mg/kg; y is % remaining. Move sliders to see RSS update.
             </div>
           </div>
         </div>
